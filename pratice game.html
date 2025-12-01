@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>鼠鼠王國：起源 v10.0</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; font-family: "Segoe UI", sans-serif; user-select: none; }
+        
+        /* 動畫定義 */
+        @keyframes float { 0% { transform: translateY(0px); } 50% { transform: translateY(-10px); } 100% { transform: translateY(0px); } }
+        @keyframes shine { 0% { background-position: 200% center; } 100% { background-position: -200% center; } }
+
+        /* UI 框架 */
+        .screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 10; background: rgba(0,0,0,0.9); transition: opacity 0.5s; }
+        .hidden { opacity: 0; pointer-events: none; z-index: -1; }
+
+        /* 封面 */
+        h1 { font-size: 60px; margin: 0; background: linear-gradient(to right, #f1c40f, #e67e22, #f1c40f); -webkit-background-clip: text; color: transparent; background-size: 200% auto; animation: shine 3s linear infinite, float 3s ease-in-out infinite; }
+        .input-group { margin-top: 30px; text-align: center; }
+        input { padding: 15px; font-size: 20px; border-radius: 30px; border: 2px solid #555; background: #222; color: #fff; text-align: center; width: 250px; outline: none; transition: 0.3s; }
+        input:focus { border-color: #f1c40f; box-shadow: 0 0 15px rgba(241,196,15,0.3); }
+        .btn { margin-top: 20px; padding: 15px 50px; font-size: 24px; border-radius: 50px; border: none; background: linear-gradient(45deg, #f39c12, #d35400); color: white; cursor: pointer; font-weight: bold; transition: transform 0.1s; box-shadow: 0 5px 15px rgba(211, 84, 0, 0.4); }
+        .btn:active { transform: scale(0.95); }
+
+        /* 遊戲內 HUD */
+        #hud { position: absolute; top: 0; left: 0; width: 100%; padding: 20px; display: flex; justify-content: space-between; pointer-events: none; z-index: 5; box-sizing: border-box; }
+        .stat-box { background: rgba(255,255,255,0.1); backdrop-filter: blur(5px); padding: 10px 20px; border-radius: 15px; border: 1px solid rgba(255,255,255,0.2); color: #fff; display: flex; flex-direction: column; align-items: center; }
+        .stat-val { font-size: 24px; font-weight: bold; color: #f1c40f; }
+        .stat-label { font-size: 12px; color: #aaa; }
+
+        /* 結算 */
+        .rank-list { list-style: none; padding: 0; width: 300px; max-height: 300px; overflow-y: auto; background: #222; border-radius: 10px; border: 1px solid #444; }
+        .rank-item { padding: 15px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; color: #ccc; }
+        .rank-item.top { color: #f1c40f; font-weight: bold; background: rgba(241,196,15,0.1); }
+        
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen" class="screen">
+        <h1>🐭 鼠鼠王國：起源</h1>
+        <div style="color:#888; margin-top:10px;">建立你的地下帝國，繁衍後代，躲避天敵</div>
+        <div class="input-group">
+            <input type="text" id="p-name" value="鼠王一世" maxlength="10" placeholder="輸入你的名字">
+            <br>
+            <button class="btn" onclick="startGame()">建立王國</button>
+        </div>
+        <div style="margin-top:30px; font-size:12px; color:#555;">
+            [WASD/方向鍵] 移動 | [空白鍵] 衝刺 | [E] 呼叫跟隨<br>
+            將食物搬回巢穴(中心)可增加人口
+        </div>
+    </div>
+
+    <div id="hud" class="hidden">
+        <div class="stat-box">
+            <span class="stat-val" id="ui-pop">1</span>
+            <span class="stat-label">王國人口</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-val" id="ui-food">0</span>
+            <span class="stat-label">巢穴存糧</span>
+        </div>
+        <div class="stat-box">
+            <span class="stat-val" id="ui-score">0</span>
+            <span class="stat-label">繁榮度</span>
+        </div>
+    </div>
+
+    <div id="end-screen" class="screen hidden">
+        <h2 style="font-size:50px; color:#e74c3c; margin-bottom:10px;">王國覆滅</h2>
+        <div style="font-size:20px; color:#fff; margin-bottom:20px;">最終繁榮度: <span id="final-score" style="color:#f1c40f">0</span></div>
+        <ul id="rank-list" class="rank-list"></ul>
+        <button class="btn" onclick="resetGame()">重建王國</button>
+    </div>
+
+    <canvas id="canvas"></canvas>
+
+<script>
+    // === 系統核心 ===
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // 遊戲狀態
+    let state = 'MENU'; // MENU, PLAYING, GAMEOVER
+    let width, height;
+    let frame = 0;
+    let particles = [];
+    
+    // 玩家與生態數據
+    let playerName = "";
+    let score = 0;
+    let nestFood = 0;
+    
+    // 實體列表
+    const player = { x:0, y:0, r:15, color:'#f1c40f', vx:0, vy:0, speed:4, carrying:null, hp:100 };
+    let rats = []; // AI 鼠鼠
+    let foods = [];
+    let nest = { x:0, y:0, r:60, level:1 };
+    let catPaw = { state:'IDLE', x:0, y:0, r:0, timer:0, warnR:0 };
+
+    // 音效
+    const AudioSys = {
+        ctx: new (window.AudioContext||window.webkitAudioContext)(),
+        play: (type) => {
+            if(AudioSys.ctx.state==='suspended') AudioSys.ctx.resume();
+            const o=AudioSys.ctx.createOscillator(), g=AudioSys.ctx.createGain();
+            o.connect(g); g.connect(AudioSys.ctx.destination);
+            const t=AudioSys.ctx.currentTime;
+            
+            if(type==='pop'){o.frequency.setValueAtTime(600,t);g.gain.setValueAtTime(0.1,t);g.gain.exponentialRampToValueAtTime(0.01,t+0.1);o.start();o.stop(t+0.1);}
+            if(type==='born'){o.type='square';o.frequency.setValueAtTime(400,t);o.frequency.linearRampToValueAtTime(600,t+0.2);g.gain.setValueAtTime(0.1,t);g.gain.linearRampToValueAtTime(0,t+0.2);o.start();o.stop(t+0.2);}
+            if(type==='die'){o.type='sawtooth';o.frequency.setValueAtTime(150,t);g.gain.setValueAtTime(0.1,t);g.gain.linearRampToValueAtTime(0,t+0.3);o.start();o.stop(t+0.3);}
+        }
+    };
+
+    // === 初始化 ===
+    function resize() { width=canvas.width=window.innerWidth; height=canvas.height=window.innerHeight; }
+    window.addEventListener('resize', resize);
+    resize();
+
+    window.startGame = function() {
+        playerName = document.getElementById('p-name').value || "無名鼠輩";
+        document.getElementById('start-screen').classList.add('hidden');
+        document.getElementById('hud').classList.remove('hidden');
+        initWorld();
+        state = 'PLAYING';
+        loop();
+    };
+
+    window.resetGame = function() {
+        document.getElementById('end-screen').classList.add('hidden');
+        document.getElementById('hud').classList.remove('hidden');
+        initWorld();
+        state = 'PLAYING';
+    };
+
+    function initWorld() {
+        nest.x = width/2; nest.y = height/2;
+        player.x = nest.x; player.y = nest.y + 100;
+        player.carrying = null;
+        score = 0;
+        nestFood = 0;
+        rats = [];
+        foods = [];
+        particles = [];
+        
+        // 初始食物
+        for(let i=0;i<20;i++) spawnFood();
+        // 初始夥伴
+        spawnRat(nest.x, nest.y, true);
+        spawnRat(nest.x, nest.y, true);
+    }
+
+    // === 生態系統類別 ===
+    
+    class RatAI {
+        constructor(x, y, isAdult) {
+            this.x = x; this.y = y;
+            this.vx = 0; this.vy = 0;
+            this.isAdult = isAdult;
+            this.age = isAdult ? 1000 : 0;
+            this.size = isAdult ? 10 : 5;
+            this.color = Math.random() > 0.95 ? '#9b59b6' : '#bdc3c7'; // 5% 紫色變異
+            if(Math.random() > 0.98) this.color = '#f1c40f'; // 2% 金色傳說
+            
+            this.hunger = 100;
+            this.state = 'WANDER'; // WANDER, SEEK_FOOD, RETURN_NEST, MATING, FLEE
+            this.target = null;
+            this.matingCD = 0;
+            this.carrying = null;
+        }
+
+        update() {
+            this.age++;
+            this.hunger -= 0.05;
+            if(this.matingCD > 0) this.matingCD--;
+
+            // 成長
+            if(!this.isAdult && this.age > 500) {
+                this.isAdult = true;
+                this.size = 10;
+                createParticles(this.x, this.y, '#fff', 5);
+                AudioSys.play('pop');
+            }
+
+            // 死亡判定
+            if(this.hunger <= 0) return false;
+
+            // AI 決策機
+            let speed = this.isAdult ? 2 : 1.5;
+            
+            // 1. 躲避天敵 (最高優先級)
+            if(catPaw.state === 'WARNING' || catPaw.state === 'SMASH') {
+                let distToDanger = Math.hypot(this.x - catPaw.x, this.y - catPaw.y);
+                if(distToDanger < catPaw.r + 50) {
+                    let angle = Math.atan2(this.y - catPaw.y, this.x - catPaw.x);
+                    this.vx = Math.cos(angle) * speed * 2; // 驚慌加速
+                    this.vy = Math.sin(angle) * speed * 2;
+                    this.state = 'FLEE';
+                }
+            }
+            
+            // 2. 正常狀態邏輯
+            if(this.state !== 'FLEE') {
+                // 飢餓找食物
+                if(this.hunger < 60 && !this.carrying) {
+                    this.state = 'SEEK_FOOD';
+                    // 尋找最近食物
+                    if(!this.target || !foods.includes(this.target)) {
+                        let nearest = null;
+                        let minDst = Infinity;
+                        foods.forEach(f => {
+                            let d = Math.hypot(this.x - f.x, this.y - f.y);
+                            if(d < minDst) { minDst = d; nearest = f; }
+                        });
+                        this.target = nearest;
+                    }
+                } 
+                // 搬運回巢
+                else if(this.carrying) {
+                    this.state = 'RETURN_NEST';
+                    this.target = nest;
+                }
+                // 繁殖 (飽食且成年)
+                else if(this.hunger > 80 && this.isAdult && this.matingCD <= 0) {
+                    this.state = 'MATING';
+                    // 尋找最近異性(簡化為任意成鼠)
+                    if(!this.target || !rats.includes(this.target)) {
+                        let partner = rats.find(r => r !== this && r.isAdult && r.state === 'MATING');
+                        this.target = partner;
+                    }
+                }
+                // 閒逛
+                else {
+                    this.state = 'WANDER';
+                    this.target = null;
+                }
+
+                // 執行移動
+                if(this.target) {
+                    let dx = this.target.x - this.x;
+                    let dy = this.target.y - this.y;
+                    let dist = Math.hypot(dx, dy);
+                    let angle = Math.atan2(dy, dx);
+                    this.vx = Math.cos(angle) * speed;
+                    this.vy = Math.sin(angle) * speed;
+
+                    // 交互判定
+                    if(dist < 10) {
+                        if(this.state === 'SEEK_FOOD') {
+                            // 吃掉或搬運
+                            let idx = foods.indexOf(this.target);
+                            if(idx > -1) {
+                                foods.splice(idx, 1);
+                                if(this.hunger < 30) {
+                                    this.hunger = 100; // 餓了直接吃
+                                } else {
+                                    this.carrying = true; // 不餓就搬回家
+                                }
+                                this.target = null;
+                            }
+                        } else if(this.state === 'RETURN_NEST') {
+                            this.carrying = false;
+                            nestFood++;
+                            score += 10;
+                            createParticles(this.x, this.y, '#f1c40f', 3);
+                        } else if(this.state === 'MATING') {
+                            // 繁殖
+                            spawnRat(this.x, this.y, false);
+                            this.matingCD = 500;
+                            if(this.target) this.target.matingCD = 500;
+                            this.target = null;
+                            this.hunger -= 30; // 生小孩耗體力
+                        }
+                    }
+                } else {
+                    // 隨機遊走
+                    if(Math.random() < 0.05) {
+                        this.vx = (Math.random()-0.5) * speed;
+                        this.vy = (Math.random()-0.5) * speed;
+                    }
+                }
+            }
+
+            // 物理更新
+            this.x += this.vx; this.y += this.vy;
+            // 邊界
+            this.x = Math.max(10, Math.min(width-10, this.x));
+            this.y = Math.max(10, Math.min(height-10, this.y));
+            
+            return true;
+        }
+
+        draw() {
+            drawMouse(this.x, this.y, this.size, Math.atan2(this.vy, this.vx), this.color, false);
+            // 狀態圖示
+            if(this.carrying) {
+                ctx.fillStyle = '#f1c40f'; ctx.beginPath(); ctx.arc(this.x, this.y-this.size, 3, 0, Math.PI*2); ctx.fill();
+            }
+            if(this.state === 'MATING') {
+                ctx.fillStyle = '#e74c3c'; ctx.font = '10px Arial'; ctx.fillText('♥', this.x, this.y-10);
+            }
+        }
+    }
+
+    function spawnRat(x, y, isAdult) {
+        if(rats.length < 50) { // 人口上限
+            rats.push(new RatAI(x, y, isAdult));
+            if(!isAdult) AudioSys.play('born');
+        }
+    }
+
+    function spawnFood() {
+        foods.push({ x: Math.random()*(width-40)+20, y: Math.random()*(height-40)+20, r: 5 });
+    }
+
+    // === 繪圖與特效 ===
+    function drawMouse(x, y, r, angle, color, isKing) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+        
+        // 身體
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.ellipse(0, 0, r*1.2, r, 0, 0, Math.PI*2); ctx.fill();
+        
+        // 王冠 (如果是主角)
+        if(isKing) {
+            ctx.fillStyle = '#f1c40f';
+            ctx.beginPath(); ctx.moveTo(-5, -r); ctx.lineTo(0, -r-10); ctx.lineTo(5, -r); ctx.fill();
+        }
+
+        // 耳朵
+        ctx.fillStyle = color;
+        ctx.beginPath(); ctx.arc(r*0.5, -r*0.6, r*0.4, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(r*0.5, r*0.6, r*0.4, 0, Math.PI*2); ctx.fill();
+        
+        // 眼睛
+        ctx.fillStyle = '#000';
+        ctx.beginPath(); ctx.arc(r*0.8, -r*0.3, r*0.15, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(r*0.8, r*0.3, r*0.15, 0, Math.PI*2); ctx.fill();
+
+        // 尾巴
+        ctx.strokeStyle = color; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(-r, 0); ctx.quadraticCurveTo(-r*1.5, Math.sin(frame/5)*5, -r*1.8, 0); ctx.stroke();
+        
+        ctx.restore();
+    }
+
+    function createParticles(x, y, color, count) {
+        for(let i=0; i<count; i++) {
+            particles.push({x, y, vx:(Math.random()-0.5)*5, vy:(Math.random()-0.5)*5, life:1, color});
+        }
+    }
+
+    // === 主循環 ===
+    const keys = {};
+    window.addEventListener('keydown', e => keys[e.code] = true);
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    function loop() {
+        if(state !== 'PLAYING') return;
+        requestAnimationFrame(loop);
+        
+        // 背景
+        ctx.fillStyle = '#1a1a1a'; ctx.fillRect(0, 0, width, height);
+        
+        // 巢穴 (安全區)
+        ctx.beginPath(); 
+        let grad = ctx.createRadialGradient(nest.x, nest.y, 10, nest.x, nest.y, nest.r);
+        grad.addColorStop(0, '#2c3e50'); grad.addColorStop(1, '#1a1a1a');
+        ctx.fillStyle = grad; ctx.arc(nest.x, nest.y, nest.r, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#34495e'; ctx.lineWidth = 2; ctx.stroke();
+        // 巢穴食物顯示
+        ctx.fillStyle = '#fff'; ctx.font = '12px Arial'; ctx.textAlign = 'center';
+        ctx.fillText(`Food: ${nestFood}`, nest.x, nest.y);
+        if(nestFood >= 10) ctx.fillText(`(Ready to spawn)`, nest.x, nest.y+15);
+
+        frame++;
+
+        // 1. 玩家控制
+        let spd = player.speed;
+        if(keys['Space']) spd *= 1.5;
+        player.vx = 0; player.vy = 0;
+        if(keys['KeyW'] || keys['ArrowUp']) player.vy = -spd;
+        if(keys['KeyS'] || keys['ArrowDown']) player.vy = spd;
+        if(keys['KeyA'] || keys['ArrowLeft']) player.vx = -spd;
+        if(keys['KeyD'] || keys['ArrowRight']) player.vx = spd;
+        
+        player.x += player.vx; player.y += player.vy;
+        // 玩家邊界
+        player.x = Math.max(15, Math.min(width-15, player.x));
+        player.y = Math.max(15, Math.min(height-15, player.y));
+
+        // 玩家互動
+        // 撿食物
+        if(!player.carrying) {
+            let fIdx = foods.findIndex(f => Math.hypot(player.x-f.x, player.y-f.y) < 20);
+            if(fIdx > -1) {
+                foods.splice(fIdx, 1);
+                player.carrying = true;
+                AudioSys.play('pop');
+            }
+        }
+        // 回巢
+        if(Math.hypot(player.x-nest.x, player.y-nest.y) < nest.r) {
+            if(player.carrying) {
+                player.carrying = false;
+                nestFood++;
+                score += 50; // 玩家貢獻分數高
+            }
+            // 玩家手動消耗食物生小孩
+            if(nestFood >= 10) {
+                nestFood -= 10;
+                spawnRat(nest.x, nest.y, false);
+                score += 100;
+            }
+        }
+
+        drawMouse(player.x, player.y, player.r, Math.atan2(player.vy, player.vx), player.color, true);
+        if(player.carrying) {
+            ctx.fillStyle='#f1c40f'; ctx.beginPath(); ctx.arc(player.x, player.y-15, 5, 0, Math.PI*2); ctx.fill();
+        }
+
+        // 2. AI 鼠鼠更新
+        rats = rats.filter(r => {
+            let alive = r.update();
+            if(!alive) {
+                createParticles(r.x, r.y, '#555', 5);
+                AudioSys.play('die');
+            }
+            return alive;
+        });
+        rats.forEach(r => r.draw());
+
+        // 3. 食物更新
+        if(foods.length < 20 && Math.random() < 0.05) spawnFood();
+        foods.forEach(f => {
+            ctx.fillStyle = '#e67e22';
+            ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI*2); ctx.fill();
+        });
+
+        // 4. 天敵貓掌
+        updateCat();
+
+        // 5. 特效
+        particles.forEach((p, i) => {
+            p.x += p.vx; p.y += p.vy; p.life -= 0.05;
+            ctx.fillStyle = p.color; ctx.globalAlpha = p.life;
+            ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fill();
+            if(p.life<=0) particles.splice(i, 1);
+        });
+        ctx.globalAlpha = 1;
+
+        // UI
+        document.getElementById('ui-pop').textContent = rats.length + 1;
+        document.getElementById('ui-food').textContent = nestFood;
+        document.getElementById('ui-score').textContent = score;
+
+        // Game Over
+        if(rats.length === 0 && !catPaw.state.includes('IDLE')) {
+            // 如果只剩玩家一人，且被貓打死 (這裡簡化為如果鼠群全滅就算輸，增加保護責任感)
+            // 實際上玩家是不死的，但為了遊戲性，當人口歸零時結束
+            gameOver();
+        }
+    }
+
+    function updateCat() {
+        if(catPaw.state === 'IDLE') {
+            if(catPaw.timer-- <= 0) {
+                catPaw.state = 'WARN';
+                // 瞄準老鼠最多的地方
+                let targetX = player.x, targetY = player.y;
+                if(rats.length > 0) {
+                    let r = rats[Math.floor(Math.random()*rats.length)];
+                    targetX = r.x; targetY = r.y;
+                }
+                catPaw.x = targetX; catPaw.y = targetY;
+                catPaw.r = 150;
+                catPaw.warnR = 0;
+                catPaw.timer = 120;
+            }
+        } else if(catPaw.state === 'WARN') {
+            catPaw.timer--;
+            ctx.strokeStyle = `rgba(231,76,60,${Math.random()})`;
+            ctx.beginPath(); ctx.arc(catPaw.x, catPaw.y, catPaw.r, 0, Math.PI*2); ctx.stroke();
+            catPaw.warnR += catPaw.r/120;
+            ctx.fillStyle = 'rgba(231,76,60,0.2)';
+            ctx.beginPath(); ctx.arc(catPaw.x, catPaw.y, catPaw.warnR, 0, Math.PI*2); ctx.fill();
+            if(catPaw.timer<=0) {
+                catPaw.state = 'SMASH';
+                catPaw.timer = 20;
+                ctx.translate(Math.random()*10, Math.random()*10); // 震動
+            }
+        } else if(catPaw.state === 'SMASH') {
+            catPaw.timer--;
+            ctx.fillStyle = '#c0392b';
+            ctx.beginPath(); ctx.arc(catPaw.x, catPaw.y, catPaw.r, 0, Math.PI*2); ctx.fill();
+            
+            // 傷害判定
+            rats = rats.filter(r => {
+                if(Math.hypot(r.x-catPaw.x, r.y-catPaw.y) < catPaw.r) {
+                    createParticles(r.x, r.y, '#c0392b', 10);
+                    AudioSys.play('die');
+                    return false;
+                }
+                return true;
+            });
+
+            if(catPaw.timer<=0) {
+                catPaw.state = 'IDLE';
+                catPaw.timer = Math.random()*300 + 200;
+            }
+        }
+    }
+
+    function gameOver() {
+        state = 'GAMEOVER';
+        document.getElementById('hud').classList.add('hidden');
+        document.getElementById('end-screen').classList.remove('hidden');
+        document.getElementById('final-score').textContent = score;
+        saveScore();
+    }
+
+    function saveScore() {
+        let ranks = JSON.parse(localStorage.getItem('rat_kingdom_ranks')||'[]');
+        ranks.push({name: playerName, score: score});
+        ranks.sort((a,b)=>b.score-a.score);
+        ranks = ranks.slice(0,5);
+        localStorage.setItem('rat_kingdom_ranks', JSON.stringify(ranks));
+        
+        let html = '';
+        ranks.forEach((r,i) => {
+            html += `<li class="rank-item ${i===0?'top':''}"><span>#${i+1} ${r.name}</span><span>${r.score}</span></li>`;
+        });
+        document.getElementById('rank-list').innerHTML = html;
+    }
+
+</script>
+</body>
+</html>
